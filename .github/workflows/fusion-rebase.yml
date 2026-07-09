@@ -1,0 +1,42 @@
+name: fusion-weekly-rebase
+
+# FUSION rebrand fork maintenance: every Monday, rebase the brand patch
+# (branch fusion-brand) onto upstream anomalyco/opencode dev. The patch is
+# brand assets only, so conflicts should be rare; a failed run means a real
+# conflict and shows up as a failed workflow notification.
+
+on:
+  schedule:
+    - cron: "0 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fusion-brand
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "fusion-bot"
+          git config user.email "jinl@tongji.edu.cn"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/anomalyco/opencode.git
+          git fetch upstream dev
+
+      - name: Rebase brand patch onto upstream dev
+        run: git rebase upstream/dev
+
+      - name: Push rebased branch
+        run: git push --force-with-lease origin fusion-brand
+
+      - name: Sync dev mirror
+        run: git push origin upstream/dev:refs/heads/dev
