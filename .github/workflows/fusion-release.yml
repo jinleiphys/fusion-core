@@ -1,0 +1,127 @@
+name: FUSION CLI release
+
+# Builds the FUSION-branded opencode CLI and attaches the binaries to a GitHub
+# release. Deliberately small: CLI only, no desktop app, no VSCode extension,
+# no Windows code signing, no npm publish. Those are upstream's problem and
+# carrying them here would mean maintaining upstream's whole release apparatus
+# forever.
+#
+# Bun cross-compiles every target from one Linux runner, so this is a single
+# job. Measured locally at about ten seconds per target after dependencies are
+# installed.
+#
+# macOS binaries are UNSIGNED and UNNOTARISED. Gatekeeper will refuse them on
+# first run until the user clears the quarantine attribute; the release notes
+# say so rather than letting people discover it as a crash. Signing needs a
+# paid Apple Developer account and is not worth it until someone asks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, without the leading v (e.g. 0.1.0)"
+        required: true
+        type: string
+      draft:
+        description: "Create the release as a draft"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # The fork only. Without this the job would also try to run on any repo
+    # this branch is pushed to.
+    if: github.repository == 'jinleiphys/fusion-core'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fusion-brand
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned to what package.json's packageManager field asks for. The
+          # repo's own pre-push hook enforces this locally, so a mismatch here
+          # would build with a bun the project has never been tested against.
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the CLI for every target
+        env:
+          OPENCODE_VERSION: ${{ inputs.version }}
+        run: ./packages/opencode/script/build.ts
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          cd packages/opencode/dist
+          shopt -s nullglob
+          made=0
+          for d in opencode-darwin-* opencode-linux-*; do
+            [ -d "$d/bin" ] || continue
+            # Rename the executable to `fusion` inside the archive. The build
+            # script emits `opencode`, and a user who installs FUSION should be
+            # running a command called fusion.
+            mv "$d/bin/opencode" "$d/bin/fusion"
+            tar -czf "fusion-${d#opencode-}.tar.gz" -C "$d/bin" fusion
+            made=$((made + 1))
+          done
+          # Fail loudly rather than publishing an empty release. A build that
+          # silently produces nothing is the failure mode this guard exists for.
+          if [ "$made" -eq 0 ]; then
+            echo "no binaries were produced; refusing to publish an empty release" >&2
+            ls -la
+            exit 1
+          fi
+          echo "count=$made" >> "$GITHUB_OUTPUT"
+          ls -lh ./*.tar.gz
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: FUSION CLI v${{ inputs.version }}
+          draft: ${{ inputs.draft }}
+          files: packages/opencode/dist/*.tar.gz
+          body: |
+            FUSION-branded build of the opencode CLI
+            (${{ steps.package.outputs.count }} platform archives).
+
+            ## Install
+
+            ```bash
+            tar -xzf fusion-<your-platform>.tar.gz
+            mv fusion ~/.local/bin/     # or anywhere on your PATH
+            ```
+
+            **macOS**: these binaries are not signed or notarised, so the first
+            run is blocked by Gatekeeper. Clear the quarantine flag:
+
+            ```bash
+            xattr -d com.apple.quarantine ~/.local/bin/fusion
+            ```
+
+            ## Turn the updater off
+
+            The upstream update check is hardcoded to
+            `anomalyco/opencode`, so this binary will offer to "upgrade" itself
+            into plain opencode and lose the FUSION branding. Disable it in
+            `~/.config/opencode/opencode.json`:
+
+            ```json
+            { "autoupdate": false }
+            ```
+
+            `scripts/fusion_init.py` in the FUSION repository does this for you.
+
+            ## Then
+
+            Get the skills and the knowledge base:
+            <https://github.com/jinleiphys/FUSION>
