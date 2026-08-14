@@ -2,12 +2,18 @@ import { EOL } from "os"
 import { Schema } from "effect"
 import { logo as glyphs } from "./logo"
 
-const wordmark = [
-  `⠀                                ▄     `,
-  `█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█`,
-  `█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀`,
-  `▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀`,
-]
+// The plain-text wordmark, used when neither stream is a TTY, is derived from
+// the same glyphs the TTY path draws, so the two cannot drift. Upstream kept a
+// second hardcoded copy here, which is why piped output (`fusion --help | head`,
+// CI logs, `> file`) went on printing the old name long after the logo itself
+// was rebranded. Fill marks become their plain equivalents: `_` is a blank cell
+// inside a glyph's box, `^` and `~` are shading.
+// Do NOT trim the left half: its trailing space is load-bearing, and is what
+// keeps U and S from colliding into a single eight-cell bar (see logo.ts). The
+// TTY path adds one more space as its gap, so composing the same way here keeps
+// both renderings the same width.
+const plain = (line: string) => line.replace(/_/g, " ").replace(/[\^~]/g, "▀")
+const wordmark = glyphs.left.map((row, index) => `${plain(row)} ${plain(glyphs.right[index] ?? "")}`.trimEnd())
 
 export class CancelledError extends Schema.TaggedErrorClass<CancelledError>()("UICancelledError", {}) {}
 
