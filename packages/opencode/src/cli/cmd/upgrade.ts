@@ -1,74 +1,68 @@
 import type { Argv } from "yargs"
 import { UI } from "../ui"
 import * as prompts from "@clack/prompts"
-import { Installation } from "../../installation"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 
+// FUSION-specific on purpose. Upstream's upgrade fetches
+// api.github.com/repos/anomalyco/opencode/releases and pipes opencode.ai/install
+// into a shell, so inheriting it would silently replace a FUSION install with
+// plain opencode. FUSION ships only as a GitHub release tarball: no npm package,
+// no brew formula, no hosted install script, so there is nothing to pipe. This
+// command therefore reports whether a newer FUSION release exists and prints the
+// exact command to install it, rather than performing a swap it cannot do safely
+// while the binary it would overwrite is the one running.
+const REPO = "jinleiphys/FUSION"
+const RELEASES = `https://github.com/${REPO}/releases`
+const LATEST_API = `https://api.github.com/repos/${REPO}/releases/latest`
+
+function assetName(): string | undefined {
+  const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : undefined
+  if (!arch) return undefined
+  if (process.platform === "darwin") return `fusion-darwin-${arch}.tar.gz`
+  if (process.platform === "linux") return `fusion-linux-${arch}.tar.gz`
+  return undefined
+}
+
 export const UpgradeCommand = {
-  command: "upgrade [target]",
-  describe: "upgrade the underlying opencode binary, NOT FUSION itself",
-  builder: (yargs: Argv) => {
-    return yargs
-      .positional("target", {
-        describe: "version to upgrade to, for ex '0.1.48' or 'v0.1.48'",
-        type: "string",
-      })
-      .option("method", {
-        alias: "m",
-        describe: "installation method to use",
-        type: "string",
-        choices: ["curl", "npm", "pnpm", "bun", "brew", "choco", "scoop"],
-      })
-  },
-  handler: async (args: { target?: string; method?: string }) => {
+  command: "upgrade",
+  describe: "check for a newer FUSION release and print how to install it",
+  builder: (yargs: Argv) => yargs,
+  handler: async () => {
     UI.empty()
     UI.println(UI.logo("  "))
     UI.empty()
     prompts.intro("Upgrade")
-    const detectedMethod = await Installation.method()
-    const method = (args.method as Installation.Method) ?? detectedMethod
-    if (method === "unknown") {
-      prompts.log.error(`opencode is installed to ${process.execPath} and may be managed by a package manager`)
-      const install = await prompts.select({
-        message: "Install anyways?",
-        options: [
-          { label: "Yes", value: true },
-          { label: "No", value: false },
-        ],
-        initialValue: false,
-      })
-      if (!install) {
-        prompts.outro("Done")
-        return
+
+    let latest: string | undefined
+    try {
+      const response = await fetch(LATEST_API, { headers: { accept: "application/json" } })
+      if (response.ok) {
+        const data = (await response.json()) as { tag_name?: string }
+        latest = data.tag_name?.replace(/^v/, "")
       }
+    } catch {
+      // Fall through to the manual instructions: not reaching GitHub is a
+      // reason to print the steps, not a reason to fail.
     }
-    prompts.log.info("Using method: " + method)
-    const target = args.target ? args.target.replace(/^v/, "") : await Installation.latest()
 
-    if (InstallationVersion === target) {
-      prompts.log.warn(`opencode upgrade skipped: ${target} is already installed`)
+    if (latest && latest === InstallationVersion) {
+      prompts.log.success(`FUSION ${InstallationVersion} is the latest release`)
       prompts.outro("Done")
       return
     }
+    if (latest) prompts.log.info(`Installed ${InstallationVersion}, latest ${latest}`)
+    else prompts.log.warn(`Could not reach ${LATEST_API}, so the installed version was not compared`)
 
-    prompts.log.info(`From ${InstallationVersion} → ${target}`)
-    const spinner = prompts.spinner()
-    spinner.start("Upgrading...")
-    const err = await Installation.upgrade(method, target).catch((err) => err)
-    if (err) {
-      spinner.stop("Upgrade failed", 1)
-      if (err instanceof Installation.UpgradeFailedError) {
-        // necessary because choco only allows install/upgrade in elevated terminals
-        if (method === "choco" && err.stderr.includes("not running from an elevated command shell")) {
-          prompts.log.error("Please run the terminal as Administrator and try again")
-        } else {
-          prompts.log.error(err.stderr)
-        }
-      } else if (err instanceof Error) prompts.log.error(err.message)
-      prompts.outro("Done")
-      return
+    const asset = assetName()
+    if (asset) {
+      prompts.log.info(
+        `FUSION is a release tarball. From the directory holding the binary:\n\n` +
+          `  curl -fsSL ${RELEASES}/latest/download/${asset} | tar -xz\n\n` +
+          `Other platforms: ${RELEASES}/latest`,
+      )
+    } else {
+      prompts.log.info(`No prebuilt binary for ${process.platform}/${process.arch}. See ${RELEASES}/latest`)
     }
-    spinner.stop("Upgrade complete")
     prompts.outro("Done")
   },
 }
